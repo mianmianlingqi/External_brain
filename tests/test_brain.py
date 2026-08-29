@@ -92,6 +92,17 @@ def test_empty_point_is_not_clear_and_counts_in_review():
     assert review.not_clear == 1
 
 
+def test_graph_states_are_only_clear_open_or_blocked():
+    brain = init("analog-electronics")
+    empty = brain.add_point("analog-electronics", "Empty")
+    blocked = brain.add_point("analog-electronics", "Later")
+    brain.add_link(empty, blocked)
+    states = {p.name: p.state for p in brain.graph("analog-electronics").points}
+    assert set(states.values()) <= {"clear", "open", "blocked"}
+    assert states["Empty"] == "open"
+    assert states["Later"] == "blocked"
+
+
 def test_point_is_clear_when_all_questions_are_latest_right():
     brain = init("analog-electronics")
     point = brain.add_point("analog-electronics", "Ohm")

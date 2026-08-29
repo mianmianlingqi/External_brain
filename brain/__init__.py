@@ -196,9 +196,7 @@ class MemoryBrain:
             return "blocked"
         if self._point_clear(point):
             return "clear"
-        if point.questions or point.tasks:
-            return "open"
-        return "not-clear"
+        return "open"
 
     def review(self, direction: str) -> Review:
         pids = self._directions.get(direction, [])
@@ -504,6 +502,7 @@ def render_html(snapshot: ViewSnapshot) -> str:
     points = ""
     if snapshot.graph:
         points = "".join(f"<li>{p.name}:{p.state}</li>" for p in snapshot.graph.points)
+        points += "".join(f"<li>{a}->{b}</li>" for a, b in snapshot.graph.links)
     return (
         "<html><body>"
         f"<p>clear {review.clear}</p>"
@@ -513,4 +512,51 @@ def render_html(snapshot: ViewSnapshot) -> str:
         f"<ul>{points}</ul>"
         "</body></html>"
     )
+
+
+def ask_init(target: str, input_fn=input) -> tuple[Brain, str, str]:
+    direction = input_fn("First Direction? ").strip()
+    kind = input_fn("Target (local or server)? ").strip()
+    if kind not in {"local", "server"}:
+        raise ValueError(kind)
+    return expand(target, direction, kind=kind)
+
+
+def start_view_server(brain: Brain, view_secret: str, host: str = "127.0.0.1", port: int = 0):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    from urllib.parse import parse_qs, urlparse
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args) -> None:
+            return
+
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            query = parse_qs(parsed.query)
+            provided = query.get("secret", [""])[0]
+            direction = query.get("direction", [None])[0]
+            try:
+                snapshot = view_snapshot(brain, view_secret, provided, direction)
+            except ViewDenied:
+                self.send_error(403)
+                return
+            body = render_html(snapshot).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    server = ThreadingHTTPServer((host, port), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    assigned = server.server_port
+    url = f"http://{host}:{assigned}/?secret={view_secret}"
+
+    def stop() -> None:
+        server.shutdown()
+        server.server_close()
+
+    return url, stop
 

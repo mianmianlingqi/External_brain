@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from brain import NotABrain, expand, load
+from brain import NotABrain, ask_init, expand, load
 
 
 def test_expand_yields_running_brain_and_secrets(tmp_path: Path):
@@ -39,6 +39,13 @@ def test_load_keeps_points_after_expand(tmp_path: Path):
     brain.add_question(point, "What is V?", "IR")
     loaded = load(str(tmp_path))
     assert loaded.review("analog-electronics").not_clear == 1
+
+
+def test_ask_init_asks_direction_and_target(tmp_path: Path):
+    answers = iter(["analog-electronics", "server"])
+    brain, _, _ = ask_init(str(tmp_path), input_fn=lambda _: next(answers))
+    assert "analog-electronics" in brain.list_directions()
+    assert (tmp_path / ".brain" / "target").read_text(encoding="utf-8") == "server"
 
 
 def test_expand_again_does_not_change_direction(tmp_path: Path):

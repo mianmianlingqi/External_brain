@@ -13,7 +13,9 @@ The Brain is one module. Skills call it. The View only reads it. Do not invent a
 
 ## Init
 
-`expand(target, first_direction, kind="local"|"server")` writes agent secret, View secret, `agent.address`, `view.link`, and `state.json`. `load(target)` restores the same Brain. A second expand does not change the first Direction.
+`ask_init(target)` asks for the first Direction and Target (`local` or `server`), then calls `expand`. `expand` writes agent secret, View secret, `agent.address`, `view.link`, and `state.json`. `load(target)` restores the same Brain. A second expand does not change the first Direction.
+
+`start_view_server(brain, view_secret)` keeps a View HTTP page up. The URL includes the secret. `?direction=` selects a Direction. Wrong secret is 403. The page is look-only.
 
 ## Commands
 
