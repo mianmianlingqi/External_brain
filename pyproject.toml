@@ -1,0 +1,9 @@
+[project]
+name = "external-brain"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "Personal Brain module"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
