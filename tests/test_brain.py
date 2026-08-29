@@ -1,6 +1,12 @@
 import pytest
 
-from brain import Fork, NotABrain, init
+from brain import Fork, NotABrain, Seed, init
+
+
+def test_seed_refuses_review_before_init():
+    seed = Seed()
+    with pytest.raises(NotABrain):
+        seed.review("analog-electronics")
 
 
 def test_fork_refuses_review_before_init():

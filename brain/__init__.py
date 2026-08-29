@@ -1,15 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 
 class NotABrain(Exception):
-    """Raised when a Fork is used as a Brain before Init."""
-
-
-class Fork:
-    def review(self, direction: str) -> Review:
-        raise NotABrain
+    """Raised when a Seed or Fork is used as a Brain before Init."""
 
 
 @dataclass(frozen=True)
@@ -20,15 +16,28 @@ class Review:
     next_plan_point: str | None
 
 
-class Brain:
+@runtime_checkable
+class Brain(Protocol):
+    def review(self, direction: str) -> Review: ...
+
+
+class Seed:
+    def review(self, direction: str) -> Review:
+        raise NotABrain
+
+
+class Fork:
+    def review(self, direction: str) -> Review:
+        raise NotABrain
+
+
+class MemoryBrain:
     def __init__(self, first_direction: str) -> None:
-        self._directions = {first_direction}
+        self._direction = first_direction
 
     def review(self, direction: str) -> Review:
-        if direction not in self._directions:
-            raise KeyError(direction)
         return Review(clear=0, not_clear=0, misses=0, next_plan_point=None)
 
 
 def init(first_direction: str) -> Brain:
-    return Brain(first_direction)
+    return MemoryBrain(first_direction)
