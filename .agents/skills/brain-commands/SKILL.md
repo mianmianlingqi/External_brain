@@ -13,7 +13,7 @@ The Brain is one module. Skills call it. The View only reads it. Do not invent a
 
 ## Init
 
-`expand(target, first_direction)` writes agent and View secrets under the Target and returns a running Brain.
+`expand(target, first_direction, kind="local"|"server")` writes agent secret, View secret, `agent.address`, `view.link`, and `state.json`. `load(target)` restores the same Brain. A second expand does not change the first Direction.
 
 ## Commands
 

@@ -62,6 +62,17 @@ def test_brain_issues_question_verdict():
     assert brain.submit_answer(drill, "wrong") is False
 
 
+def test_misses_can_be_drilled_as_a_group():
+    brain = init("analog-electronics")
+    point = brain.add_point("analog-electronics", "Ohm")
+    q = brain.add_question(point, "What is V?", "IR")
+    brain.submit_answer(brain.drill_named(q), "no")
+    drills = brain.drill_misses("analog-electronics")
+    assert len(drills) == 1
+    assert brain.submit_answer(drills[0], "IR") is True
+    assert brain.misses("analog-electronics") == ()
+
+
 def test_latest_wrong_question_is_a_miss_then_clears():
     brain = init("analog-electronics")
     point = brain.add_point("analog-electronics", "Ohm")

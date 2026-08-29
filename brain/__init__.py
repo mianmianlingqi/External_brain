@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from itertools import count
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 
@@ -62,6 +63,7 @@ class Brain(Protocol):
     def drill_from_direction(self, direction: str) -> str: ...
     def drill_from_plan(self, direction: str) -> str: ...
     def drill_task(self, task_id: str) -> str: ...
+    def drill_misses(self, direction: str) -> tuple[str, ...]: ...
     def submit_answer(self, drill_id: str, answer: str) -> bool: ...
     def report_verdict(self, drill_id: str, right: bool) -> None: ...
     def misses(self, direction: str) -> tuple[Miss, ...]: ...
@@ -114,7 +116,8 @@ class _Point:
 
 class MemoryBrain:
     def __init__(self, first_direction: str) -> None:
-        self._ids = count(1)
+        self._n = 0
+        self._path: Path | None = None
         self._directions: dict[str, list[str]] = {first_direction: []}
         self._points: dict[str, _Point] = {}
         self._links: list[tuple[str, str]] = []
@@ -124,7 +127,8 @@ class MemoryBrain:
         self._drills: dict[str, tuple[str, str]] = {}
 
     def _id(self, prefix: str) -> str:
-        return f"{prefix}-{next(self._ids)}"
+        self._n += 1
+        return f"{prefix}-{self._n}"
 
     def list_directions(self) -> tuple[str, ...]:
         return tuple(self._directions)
@@ -138,6 +142,7 @@ class MemoryBrain:
         pid = self._id("point")
         self._points[pid] = _Point(name=name, direction=direction)
         self._directions[direction].append(pid)
+        self._save()
         return pid
 
     def add_question(self, point_id: str, prompt: str, expected: str) -> str:
@@ -145,11 +150,13 @@ class MemoryBrain:
             raise MissingExpectedAnswer
         qid = self._id("question")
         self._points[point_id].questions[qid] = _Question(prompt=prompt, expected=expected)
+        self._save()
         return qid
 
     def add_task(self, point_id: str, prompt: str) -> str:
         tid = self._id("task")
         self._points[point_id].tasks[tid] = _Task(prompt=prompt)
+        self._save()
         return tid
 
     def _would_cycle(self, before_id: str, after_id: str) -> bool:
@@ -172,6 +179,7 @@ class MemoryBrain:
         if self._would_cycle(before_id, after_id):
             raise CycleRejected
         self._links.append((before_id, after_id))
+        self._save()
 
     def _point_clear(self, point: _Point) -> bool:
         items = list(point.questions.values()) + list(point.tasks.values())
@@ -255,6 +263,18 @@ class MemoryBrain:
         self._drills[did] = ("task", task_id)
         return did
 
+    def drill_misses(self, direction: str) -> tuple[str, ...]:
+        drills: list[str] = []
+        for pid in self._directions.get(direction, []):
+            point = self._points[pid]
+            for qid, question in point.questions.items():
+                if question.latest is False:
+                    drills.append(self.drill_named(qid))
+            for tid, task in point.tasks.items():
+                if task.latest is False:
+                    drills.append(self.drill_task(tid))
+        return tuple(drills)
+
     def _find_question(self, question_id: str) -> _Question:
         for point in self._points.values():
             if question_id in point.questions:
@@ -274,6 +294,7 @@ class MemoryBrain:
         question = self._find_question(target)
         right = answer == question.expected
         question.latest = right
+        self._save()
         return right
 
     def report_verdict(self, drill_id: str, right: bool) -> None:
@@ -281,6 +302,7 @@ class MemoryBrain:
         if kind != "task":
             raise TypeError(kind)
         self._find_task(target).latest = right
+        self._save()
 
     def propose_from_text(self, direction: str, text: str) -> tuple[Proposal, ...]:
         created: list[Proposal] = []
@@ -319,7 +341,7 @@ class MemoryBrain:
         return tuple(created)
 
     def accept(self, proposal_id: str) -> None:
-        prop = self._proposals.pop(proposal_id)
+        prop = self._proposals[proposal_id]
         names = {p.name: pid for pid, p in self._points.items()}
         if prop.kind == "point":
             self.add_point(prop.payload["direction"], prop.payload["name"])
@@ -331,6 +353,8 @@ class MemoryBrain:
             self.add_task(point_id, prop.payload["prompt"])
         elif prop.kind == "link":
             self.add_link(names[prop.payload["before"]], names[prop.payload["after"]])
+        self._proposals.pop(proposal_id)
+        self._save()
 
     def reject(self, proposal_id: str) -> None:
         self._proposals.pop(proposal_id)
@@ -354,12 +378,60 @@ class MemoryBrain:
             extra = [p for p in ordered if p not in kept]
             ordered = kept + extra
         self._plans[direction] = ordered
+        self._save()
         return tuple(self._points[p].name for p in ordered)
 
     def edit_plan(self, direction: str, point_names: tuple[str, ...]) -> None:
         names = {self._points[pid].name: pid for pid in self._directions[direction]}
         self._plan_manual[direction] = [names[n] for n in point_names]
         self._plans[direction] = list(self._plan_manual[direction])
+        self._save()
+
+    def _save(self) -> None:
+        if self._path is None:
+            return
+        self._path.write_text(json.dumps(self._dump()), encoding="utf-8")
+
+    def _dump(self) -> dict:
+        points = {
+            pid: {
+                "name": point.name,
+                "direction": point.direction,
+                "questions": {
+                    qid: {"prompt": q.prompt, "expected": q.expected, "latest": q.latest}
+                    for qid, q in point.questions.items()
+                },
+                "tasks": {tid: {"prompt": t.prompt, "latest": t.latest} for tid, t in point.tasks.items()},
+            }
+            for pid, point in self._points.items()
+        }
+        return {
+            "n": self._n,
+            "directions": self._directions,
+            "points": points,
+            "links": self._links,
+            "plans": self._plans,
+            "plan_manual": self._plan_manual,
+        }
+
+    @classmethod
+    def from_dump(cls, data: dict, path: Path | None = None) -> MemoryBrain:
+        brain = cls(next(iter(data["directions"])))
+        brain._n = data["n"]
+        brain._directions = {k: list(v) for k, v in data["directions"].items()}
+        brain._points = {}
+        for pid, raw in data["points"].items():
+            point = _Point(name=raw["name"], direction=raw["direction"])
+            for qid, q in raw["questions"].items():
+                point.questions[qid] = _Question(q["prompt"], q["expected"], q["latest"])
+            for tid, t in raw["tasks"].items():
+                point.tasks[tid] = _Task(t["prompt"], t["latest"])
+            brain._points[pid] = point
+        brain._links = [tuple(link) for link in data["links"]]
+        brain._plans = {k: list(v) for k, v in data["plans"].items()}
+        brain._plan_manual = {k: (list(v) if v else None) for k, v in data["plan_manual"].items()}
+        brain._path = path
+        return brain
 
 
 def init(first_direction: str) -> Brain:
@@ -377,33 +449,38 @@ class ViewSnapshot:
     graph: Graph | None
 
 
-def expand(target: str, first_direction: str) -> tuple[Brain, str, str]:
-    from pathlib import Path
+def expand(target: str, first_direction: str, kind: str = "local") -> tuple[Brain, str, str]:
     from secrets import token_urlsafe
 
     root = Path(target)
     brain_dir = root / ".brain"
-    if not (brain_dir / "direction").exists():
-        brain_dir.mkdir(parents=True, exist_ok=True)
-        agent_secret = token_urlsafe(16)
-        view_secret = token_urlsafe(16)
-        (brain_dir / "agent.secret").write_text(agent_secret, encoding="utf-8")
-        (brain_dir / "view.secret").write_text(view_secret, encoding="utf-8")
-        (brain_dir / "direction").write_text(first_direction, encoding="utf-8")
-        (root / "WORKSPACE.md").write_text("Expanded Brain workspace.\n", encoding="utf-8")
-    else:
+    state = brain_dir / "state.json"
+    if state.exists():
         agent_secret = (brain_dir / "agent.secret").read_text(encoding="utf-8")
         view_secret = (brain_dir / "view.secret").read_text(encoding="utf-8")
-    return MemoryBrain(first_direction), agent_secret, view_secret
+        return load(target), agent_secret, view_secret
+    brain_dir.mkdir(parents=True, exist_ok=True)
+    agent_secret = token_urlsafe(16)
+    view_secret = token_urlsafe(16)
+    (brain_dir / "agent.secret").write_text(agent_secret, encoding="utf-8")
+    (brain_dir / "view.secret").write_text(view_secret, encoding="utf-8")
+    (brain_dir / "direction").write_text(first_direction, encoding="utf-8")
+    (brain_dir / "agent.address").write_text(f"file://{brain_dir.resolve()}", encoding="utf-8")
+    (brain_dir / "view.link").write_text(f"/view?secret={view_secret}", encoding="utf-8")
+    (brain_dir / "target").write_text(kind, encoding="utf-8")
+    (root / "WORKSPACE.md").write_text("Expanded Brain workspace.\n", encoding="utf-8")
+    brain = MemoryBrain(first_direction)
+    brain._path = state
+    brain._save()
+    return brain, agent_secret, view_secret
 
 
 def load(target: str) -> Brain:
-    from pathlib import Path
-
-    marker = Path(target) / ".brain" / "direction"
-    if not marker.exists():
+    state = Path(target) / ".brain" / "state.json"
+    if not state.exists():
         raise NotABrain
-    return MemoryBrain(marker.read_text(encoding="utf-8").strip())
+    data = json.loads(state.read_text(encoding="utf-8"))
+    return MemoryBrain.from_dump(data, path=state)
 
 
 def view_snapshot(brain: Brain, view_secret: str, provided_secret: str, direction: str | None = None) -> ViewSnapshot:
