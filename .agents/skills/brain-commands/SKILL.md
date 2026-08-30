@@ -17,7 +17,7 @@ The Brain is one module. Skills call it. The View only reads it. Do not invent a
 
 Local Target: `load(target)` restores the Brain from `.brain/`. `agent.address` is `file://`.
 
-Server Target: `agent.address` is `{public_url}/brain` and `view.link` is `{public_url}/?secret=...`. Agents use `connect(address, agent_secret)` — do not `load` an empty local folder. `python -m brain serve <target>` listens on `0.0.0.0` and `$PORT` even before Init (`GET /health` is `ok`). Init is `POST /brain` with `method=expand` and `first_direction` (optional `public_url`). Until then Brain commands are refused. After Init, GET serves the View and POST `/brain` accepts Agent commands.
+Server Target: `agent.address` is `{public_url}/brain` and `view.link` is `{public_url}/?secret=...`. Agents use `connect(address, agent_secret)` — do not `load` an empty local folder. `python -m brain serve <target>` listens on `0.0.0.0` and `$PORT` even before Init (`GET /health` is `ok`). Init is `POST /brain` with `method=expand` and `first_direction` (optional `public_url`). Until then Brain commands are refused. After Init, GET serves the View and POST `/brain` accepts Agent commands. The published image serves `/data`; that directory must be a volume so `serve_target` can reload the same Direction after the process restarts.
 
 `start_view_server(brain, view_secret)` keeps a View HTTP page up. `serve(brain, view_secret, agent_secret)` also accepts Agent POSTs. The View URL includes the View secret. `?direction=` selects a Direction. Wrong View secret is 403. The page is look-only. Wrong Agent secret cannot change the Brain. The View secret cannot POST.
 

@@ -102,6 +102,38 @@ def test_serve_target_stays_up_before_init(tmp_path):
         stop()
 
 
+def test_serve_target_reloads_direction_after_restart(tmp_path):
+    _, agent_url, stop = serve_target(str(tmp_path), host="127.0.0.1")
+    try:
+        body = json.loads(
+            _post(
+                agent_url,
+                {
+                    "method": "expand",
+                    "args": {
+                        "first_direction": "analog-electronics",
+                        "public_url": "https://brain.example",
+                    },
+                },
+            ).read()
+        )
+        secret = body["result"]["agent_secret"]
+        view_secret = body["result"]["view_secret"]
+    finally:
+        stop()
+
+    view_url, agent_url, stop = serve_target(str(tmp_path), host="127.0.0.1")
+    try:
+        remote = connect(agent_url, secret)
+        assert "analog-electronics" in remote.list_directions()
+        listing = urlopen(
+            view_url.split("?")[0] + "?secret=" + view_secret, timeout=2
+        ).read().decode("utf-8")
+        assert "analog-electronics" in listing
+    finally:
+        stop()
+
+
 def test_remote_brain_matches_protocol_after_drill():
     brain = init("analog-electronics")
     _, agent_url, stop = serve(brain, "view-secret", "agent-secret", host="127.0.0.1")
