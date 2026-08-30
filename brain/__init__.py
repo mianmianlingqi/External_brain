@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from urllib.parse import quote
 
 
 class NotABrain(Exception):
@@ -509,24 +511,87 @@ def view_snapshot(brain: Brain, view_secret: str, provided_secret: str, directio
     )
 
 
-def render_html(snapshot: ViewSnapshot) -> str:
+_VIEW_CSS = """
+:root{--paper:#dfe8f4;--sheet:#f4f7fb;--ink:#15243c;--mute:#5c6d86;--rule:#b7c6da;--spine:#8b1e2d;--clear:#1f6b4a;--open:#b56a12;--blocked:#6b7280;--miss:#b42318}
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%;background:var(--paper);color:var(--ink);font-family:"IBM Plex Sans","Noto Sans SC",sans-serif}
+body{background-image:linear-gradient(90deg,transparent 47px,#c23b2e22 47px,#c23b2e22 49px,transparent 49px),repeating-linear-gradient(180deg,transparent 0,transparent 31px,var(--rule) 31px,var(--rule) 32px);background-color:#c5d2e4}
+.wrap{max-width:44rem;margin:0 auto;padding:2.5rem 1.25rem 4rem}
+.sheet{background:var(--sheet);border:1px solid #9aafc8;box-shadow:6px 8px 0 #15243c14;padding:1.75rem 1.5rem 2rem;position:relative}
+.sheet:before{content:"";position:absolute;left:0;top:0;bottom:0;width:.55rem;background:repeating-linear-gradient(180deg,var(--spine) 0,var(--spine) 10px,transparent 10px,transparent 18px)}
+.kicker{font-size:.72rem;letter-spacing:.18em;text-transform:uppercase;color:var(--mute);margin:0 0 .35rem}
+h1{font-family:"Noto Serif SC","Source Han Serif SC",serif;font-weight:650;font-size:1.7rem;line-height:1.25;margin:0 0 1.25rem}
+.dirs{list-style:none;padding:0;margin:0;display:grid;gap:.7rem}
+.dirs a,.dirs li{display:block;padding:.85rem 1rem;border:1px solid var(--rule);background:#fff;color:var(--ink);text-decoration:none}
+.dirs a:hover{border-color:var(--ink)}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:.7rem;margin:0 0 1.4rem}
+.stat{margin:0;padding:.85rem .9rem;border:1px solid var(--rule);background:#fff}
+.stat b{display:block;font-size:1.6rem;font-variant-numeric:tabular-nums}
+.stat span{font-size:.78rem;color:var(--mute)}
+.graph{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.45rem}
+.graph li{padding:.35rem .6rem;border:1px solid var(--rule);background:#fff;font-size:.92rem}
+.graph .clear{border-color:var(--clear);color:var(--clear)}
+.graph .open{border-color:var(--open);color:var(--open)}
+.graph .blocked{border-color:var(--blocked);color:var(--blocked)}
+.back{display:inline-block;margin-bottom:1rem;color:var(--mute);font-size:.85rem}
+@media (max-width:520px){.stats{grid-template-columns:1fr}}
+"""
+
+
+def _view_page(title: str, body: str) -> str:
+    safe_title = html.escape(title)
+    return (
+        "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{safe_title}</title>"
+        "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
+        "<link rel=\"stylesheet\" href=\"https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=Noto+Serif+SC:wght@650&display=swap\">"
+        f"<style>{_VIEW_CSS}</style></head>"
+        f"<body><main class=\"wrap\"><article class=\"sheet\">{body}</article></main></body></html>"
+    )
+
+
+def render_html(snapshot: ViewSnapshot, secret: str = "", direction: str | None = None) -> str:
     if snapshot.review is None:
-        items = "".join(f"<li>{name}</li>" for name in snapshot.directions)
-        return f"<html><body><ul>{items}</ul></body></html>"
+        items = []
+        for name in snapshot.directions:
+            label = html.escape(name)
+            if secret:
+                href = f"?secret={quote(secret, safe='')}&direction={quote(name, safe='')}"
+                items.append(f"<li><a href=\"{html.escape(href, quote=True)}\">{label}</a></li>")
+            else:
+                items.append(f"<li>{label}</li>")
+        inner = (
+            "<p class=\"kicker\">View</p><h1>科目</h1>"
+            f"<ul class=\"dirs\">{''.join(items)}</ul>"
+        )
+        return _view_page("View", inner)
     review = snapshot.review
+    heading = html.escape(direction or "Review")
     points = ""
     if snapshot.graph:
-        points = "".join(f"<li>{p.name}:{p.state}</li>" for p in snapshot.graph.points)
-        points += "".join(f"<li>{a}->{b}</li>" for a, b in snapshot.graph.links)
-    return (
-        "<html><body>"
-        f"<p>clear {review.clear}</p>"
-        f"<p>not-clear {review.not_clear}</p>"
-        f"<p>misses {review.misses}</p>"
-        f"<p>next {review.next_plan_point or 'none'}</p>"
-        f"<ul>{points}</ul>"
-        "</body></html>"
+        chips = []
+        for p in snapshot.graph.points:
+            chips.append(
+                f"<li class=\"{html.escape(p.state)}\">{html.escape(p.name)}:{html.escape(p.state)}</li>"
+            )
+        for a, b in snapshot.graph.links:
+            chips.append(f"<li>{html.escape(a)}->{html.escape(b)}</li>")
+        points = f"<ul class=\"graph\">{''.join(chips)}</ul>"
+    back = ""
+    if secret:
+        back = f"<a class=\"back\" href=\"?secret={quote(secret, safe='')}\">全部科目</a>"
+    inner = (
+        f"{back}<p class=\"kicker\">Review</p><h1>{heading}</h1>"
+        "<div class=\"stats\">"
+        f"<p class=\"stat\"><b>{review.clear}</b><span>clear {review.clear}</span></p>"
+        f"<p class=\"stat\"><b>{review.not_clear}</b><span>not-clear {review.not_clear}</span></p>"
+        f"<p class=\"stat\"><b>{review.misses}</b><span>misses {review.misses}</span></p>"
+        f"<p class=\"stat\"><b>{html.escape(review.next_plan_point or 'none')}</b><span>next {html.escape(review.next_plan_point or 'none')}</span></p>"
+        "</div>"
+        f"{points}"
     )
+    return _view_page(direction or "Review", inner)
 
 
 def ask_init(target: str, input_fn=input) -> tuple[Brain, str, str]:
@@ -767,7 +832,11 @@ def serve(
             if slot["brain"] is None:
                 self._send(
                     200,
-                    b"<html><body><p>Brain is not initialized. Run Init.</p></body></html>",
+                    _view_page(
+                        "View",
+                        "<p class=\"kicker\">View</p><h1>尚未就绪</h1>"
+                        "<p>Brain is not initialized. Run Init.</p>",
+                    ).encode("utf-8"),
                     "text/html; charset=utf-8",
                 )
                 return
@@ -779,7 +848,11 @@ def serve(
             except ViewDenied:
                 self.send_error(403)
                 return
-            self._send(200, render_html(snapshot).encode("utf-8"), "text/html; charset=utf-8")
+            self._send(
+                200,
+                render_html(snapshot, provided, direction).encode("utf-8"),
+                "text/html; charset=utf-8",
+            )
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
