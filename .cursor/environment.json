@@ -1,0 +1,11 @@
+{
+  "name": "External Brain",
+  "install": "python3 -m pip install --user --break-system-packages --upgrade pip pytest",
+  "terminals": [
+    {
+      "name": "brain-server",
+      "command": "FIRST_DIRECTION=analog-electronics PUBLIC_URL=http://127.0.0.1:8080 PORT=8080 python3 -m brain serve \"$HOME/brain-data\""
+    }
+  ],
+  "ports": [{ "name": "brain", "port": 8080 }]
+}
