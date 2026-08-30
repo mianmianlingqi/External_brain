@@ -1,0 +1,9 @@
+.brain
+.venv
+__pycache__
+.pytest_cache
+.agents
+.scratch
+.git
+tests
+*.pyc

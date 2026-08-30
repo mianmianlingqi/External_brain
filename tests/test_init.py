@@ -27,9 +27,17 @@ def test_load_after_expand_can_review(tmp_path: Path):
 
 
 def test_expand_records_address_and_view_link(tmp_path: Path):
-    expand(str(tmp_path), "analog-electronics", kind="server")
+    expand(str(tmp_path), "analog-electronics")
     assert (tmp_path / ".brain" / "agent.address").read_text(encoding="utf-8").startswith("file://")
     assert "secret=" in (tmp_path / ".brain" / "view.link").read_text(encoding="utf-8")
+
+
+def test_expand_server_writes_public_urls(tmp_path: Path):
+    _, _, view_secret = expand(
+        str(tmp_path), "analog-electronics", kind="server", public_url="https://brain.fly.dev"
+    )
+    assert (tmp_path / ".brain" / "agent.address").read_text(encoding="utf-8") == "https://brain.fly.dev/brain"
+    assert (tmp_path / ".brain" / "view.link").read_text(encoding="utf-8") == f"https://brain.fly.dev/?secret={view_secret}"
     assert (tmp_path / ".brain" / "target").read_text(encoding="utf-8") == "server"
 
 
@@ -42,10 +50,11 @@ def test_load_keeps_points_after_expand(tmp_path: Path):
 
 
 def test_ask_init_asks_direction_and_target(tmp_path: Path):
-    answers = iter(["analog-electronics", "server"])
+    answers = iter(["analog-electronics", "server", "https://brain.example"])
     brain, _, _ = ask_init(str(tmp_path), input_fn=lambda _: next(answers))
     assert "analog-electronics" in brain.list_directions()
     assert (tmp_path / ".brain" / "target").read_text(encoding="utf-8") == "server"
+    assert (tmp_path / ".brain" / "agent.address").read_text(encoding="utf-8") == "https://brain.example/brain"
 
 
 def test_expand_again_does_not_change_direction(tmp_path: Path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol, runtime_checkable
@@ -137,6 +138,7 @@ class MemoryBrain:
         self._directions.setdefault(name, [])
         self._plans.setdefault(name, [])
         self._plan_manual.setdefault(name, None)
+        self._save()
 
     def add_point(self, direction: str, name: str) -> str:
         pid = self._id("point")
@@ -440,6 +442,10 @@ class ViewDenied(Exception):
     """Raised when the View secret does not match."""
 
 
+class AgentDenied(Exception):
+    """Raised when the Agent secret does not match."""
+
+
 @dataclass(frozen=True)
 class ViewSnapshot:
     directions: tuple[str, ...]
@@ -447,7 +453,9 @@ class ViewSnapshot:
     graph: Graph | None
 
 
-def expand(target: str, first_direction: str, kind: str = "local") -> tuple[Brain, str, str]:
+def expand(
+    target: str, first_direction: str, kind: str = "local", public_url: str | None = None
+) -> tuple[Brain, str, str]:
     from secrets import token_urlsafe
 
     root = Path(target)
@@ -457,14 +465,21 @@ def expand(target: str, first_direction: str, kind: str = "local") -> tuple[Brai
         agent_secret = (brain_dir / "agent.secret").read_text(encoding="utf-8")
         view_secret = (brain_dir / "view.secret").read_text(encoding="utf-8")
         return load(target), agent_secret, view_secret
+    if kind == "server" and not public_url:
+        raise ValueError("public_url")
     brain_dir.mkdir(parents=True, exist_ok=True)
     agent_secret = token_urlsafe(16)
     view_secret = token_urlsafe(16)
     (brain_dir / "agent.secret").write_text(agent_secret, encoding="utf-8")
     (brain_dir / "view.secret").write_text(view_secret, encoding="utf-8")
     (brain_dir / "direction").write_text(first_direction, encoding="utf-8")
-    (brain_dir / "agent.address").write_text(f"file://{brain_dir.resolve()}", encoding="utf-8")
-    (brain_dir / "view.link").write_text(f"/view?secret={view_secret}", encoding="utf-8")
+    if kind == "server":
+        base = public_url.rstrip("/")
+        (brain_dir / "agent.address").write_text(f"{base}/brain", encoding="utf-8")
+        (brain_dir / "view.link").write_text(f"{base}/?secret={view_secret}", encoding="utf-8")
+    else:
+        (brain_dir / "agent.address").write_text(f"file://{brain_dir.resolve()}", encoding="utf-8")
+        (brain_dir / "view.link").write_text(f"/view?secret={view_secret}", encoding="utf-8")
     (brain_dir / "target").write_text(kind, encoding="utf-8")
     (root / "WORKSPACE.md").write_text("Expanded Brain workspace.\n", encoding="utf-8")
     brain = MemoryBrain(first_direction)
@@ -519,17 +534,228 @@ def ask_init(target: str, input_fn=input) -> tuple[Brain, str, str]:
     kind = input_fn("Target (local or server)? ").strip()
     if kind not in {"local", "server"}:
         raise ValueError(kind)
+    if kind == "server":
+        public_url = input_fn("Public URL? ").strip()
+        return expand(target, direction, kind=kind, public_url=public_url)
     return expand(target, direction, kind=kind)
 
 
-def start_view_server(brain: Brain, view_secret: str, host: str = "127.0.0.1", port: int = 0):
+_BRAIN_METHODS = frozenset(
+    {
+        "review",
+        "add_direction",
+        "add_point",
+        "add_question",
+        "add_task",
+        "add_link",
+        "drill_named",
+        "drill_from_direction",
+        "drill_from_plan",
+        "drill_task",
+        "drill_misses",
+        "submit_answer",
+        "report_verdict",
+        "misses",
+        "graph",
+        "propose_from_text",
+        "accept",
+        "reject",
+        "update_plan",
+        "edit_plan",
+        "list_directions",
+    }
+)
+
+_REMOTE_ERRORS = {
+    "CycleRejected": CycleRejected,
+    "MissingExpectedAnswer": MissingExpectedAnswer,
+    "KeyError": KeyError,
+    "TypeError": TypeError,
+    "NotABrain": NotABrain,
+}
+
+
+def _agent_secret_from(headers: dict[str, str], body: dict) -> str:
+    auth = headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return body.get("secret") or headers.get("X-Agent-Secret") or ""
+
+
+def _encode_result(value):
+    if value is None or isinstance(value, (bool, str, int)):
+        return value
+    if isinstance(value, Review):
+        return {
+            "clear": value.clear,
+            "not_clear": value.not_clear,
+            "misses": value.misses,
+            "next_plan_point": value.next_plan_point,
+        }
+    if isinstance(value, Graph):
+        return {
+            "points": [{"name": p.name, "state": p.state} for p in value.points],
+            "links": [list(link) for link in value.links],
+        }
+    if isinstance(value, Proposal):
+        return {"id": value.id, "kind": value.kind, "payload": value.payload}
+    if isinstance(value, Miss):
+        return {"name": value.name, "kind": value.kind}
+    if isinstance(value, tuple):
+        return [_encode_result(item) for item in value]
+    return value
+
+
+def _decode_result(method: str, data):
+    if method == "review":
+        return Review(**data)
+    if method == "graph":
+        return Graph(
+            points=tuple(GraphPoint(**point) for point in data["points"]),
+            links=tuple(tuple(link) for link in data["links"]),
+        )
+    if method == "propose_from_text":
+        return tuple(Proposal(item["id"], item["kind"], item["payload"]) for item in data)
+    if method == "misses":
+        return tuple(Miss(item["name"], item["kind"]) for item in data)
+    if method in {"list_directions", "update_plan", "drill_misses"}:
+        return tuple(data)
+    return data
+
+
+def _prepare_args(method: str, args: dict) -> dict:
+    prepared = dict(args)
+    if method == "edit_plan" and "point_names" in prepared:
+        prepared["point_names"] = tuple(prepared["point_names"])
+    return prepared
+
+
+class RemoteBrain:
+    def __init__(self, address: str, agent_secret: str) -> None:
+        self._address = address
+        self._secret = agent_secret
+
+    def _call(self, method: str, **args):
+        from urllib.error import HTTPError
+        from urllib.request import Request, urlopen
+
+        payload = json.dumps({"method": method, "args": args, "secret": self._secret}).encode("utf-8")
+        req = Request(
+            self._address,
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urlopen(req, timeout=30) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except HTTPError as exc:
+            raw = exc.read().decode("utf-8")
+            if exc.code == 403:
+                raise AgentDenied from exc
+            try:
+                body = json.loads(raw)
+            except json.JSONDecodeError:
+                raise
+            error = body.get("error")
+            if error in _REMOTE_ERRORS:
+                raise _REMOTE_ERRORS[error](body.get("message", "")) from exc
+            raise
+        return _decode_result(method, body.get("result"))
+
+    def review(self, direction: str) -> Review:
+        return self._call("review", direction=direction)
+
+    def add_direction(self, name: str) -> None:
+        self._call("add_direction", name=name)
+
+    def add_point(self, direction: str, name: str) -> str:
+        return self._call("add_point", direction=direction, name=name)
+
+    def add_question(self, point_id: str, prompt: str, expected: str) -> str:
+        return self._call("add_question", point_id=point_id, prompt=prompt, expected=expected)
+
+    def add_task(self, point_id: str, prompt: str) -> str:
+        return self._call("add_task", point_id=point_id, prompt=prompt)
+
+    def add_link(self, before_id: str, after_id: str) -> None:
+        self._call("add_link", before_id=before_id, after_id=after_id)
+
+    def drill_named(self, question_id: str) -> str:
+        return self._call("drill_named", question_id=question_id)
+
+    def drill_from_direction(self, direction: str) -> str:
+        return self._call("drill_from_direction", direction=direction)
+
+    def drill_from_plan(self, direction: str) -> str:
+        return self._call("drill_from_plan", direction=direction)
+
+    def drill_task(self, task_id: str) -> str:
+        return self._call("drill_task", task_id=task_id)
+
+    def drill_misses(self, direction: str) -> tuple[str, ...]:
+        return self._call("drill_misses", direction=direction)
+
+    def submit_answer(self, drill_id: str, answer: str) -> bool:
+        return self._call("submit_answer", drill_id=drill_id, answer=answer)
+
+    def report_verdict(self, drill_id: str, right: bool) -> None:
+        self._call("report_verdict", drill_id=drill_id, right=right)
+
+    def misses(self, direction: str) -> tuple[Miss, ...]:
+        return self._call("misses", direction=direction)
+
+    def graph(self, direction: str) -> Graph:
+        return self._call("graph", direction=direction)
+
+    def propose_from_text(self, direction: str, text: str) -> tuple[Proposal, ...]:
+        return self._call("propose_from_text", direction=direction, text=text)
+
+    def accept(self, proposal_id: str) -> None:
+        self._call("accept", proposal_id=proposal_id)
+
+    def reject(self, proposal_id: str) -> None:
+        self._call("reject", proposal_id=proposal_id)
+
+    def update_plan(self, direction: str) -> tuple[str, ...]:
+        return self._call("update_plan", direction=direction)
+
+    def edit_plan(self, direction: str, point_names: tuple[str, ...]) -> None:
+        self._call("edit_plan", direction=direction, point_names=list(point_names))
+
+    def list_directions(self) -> tuple[str, ...]:
+        return self._call("list_directions")
+
+
+def connect(address: str, agent_secret: str) -> Brain:
+    return RemoteBrain(address, agent_secret)
+
+
+def serve(
+    brain: Brain,
+    view_secret: str,
+    agent_secret: str,
+    host: str = "0.0.0.0",
+    port: int | None = None,
+):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-    from threading import Thread
+    from threading import Lock, Thread
     from urllib.parse import parse_qs, urlparse
+
+    if port is None:
+        port = int(os.environ.get("PORT", "0"))
+    lock = Lock()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args) -> None:
             return
+
+        def _send(self, code: int, body: bytes, content_type: str) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
@@ -541,22 +767,54 @@ def start_view_server(brain: Brain, view_secret: str, host: str = "127.0.0.1", p
             except ViewDenied:
                 self.send_error(403)
                 return
-            body = render_html(snapshot).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self._send(200, render_html(snapshot).encode("utf-8"), "text/html; charset=utf-8")
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            if parsed.path != "/brain":
+                self.send_error(404)
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length)
+            try:
+                payload = json.loads(raw.decode("utf-8") or "{}")
+            except json.JSONDecodeError:
+                self.send_error(400)
+                return
+            provided = _agent_secret_from({k: self.headers[k] for k in self.headers}, payload)
+            method = payload.get("method", "")
+            if not agent_secret or provided != agent_secret or method not in _BRAIN_METHODS:
+                self.send_error(403)
+                return
+            args = _prepare_args(method, payload.get("args") or {})
+            try:
+                with lock:
+                    result = getattr(brain, method)(**args)
+            except Exception as exc:
+                if type(exc) not in _REMOTE_ERRORS.values():
+                    raise
+                body = json.dumps({"ok": False, "error": type(exc).__name__, "message": str(exc)}).encode("utf-8")
+                self._send(400, body, "application/json")
+                return
+            body = json.dumps({"ok": True, "result": _encode_result(result)}).encode("utf-8")
+            self._send(200, body, "application/json")
 
     server = ThreadingHTTPServer((host, port), Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     assigned = server.server_port
-    url = f"http://{host}:{assigned}/?secret={view_secret}"
+    display = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    view_url = f"http://{display}:{assigned}/?secret={view_secret}"
+    agent_url = f"http://{display}:{assigned}/brain"
 
     def stop() -> None:
         server.shutdown()
         server.server_close()
 
-    return url, stop
+    return view_url, agent_url, stop
+
+
+def start_view_server(brain: Brain, view_secret: str, host: str = "127.0.0.1", port: int = 0):
+    view_url, _, stop = serve(brain, view_secret, "", host=host, port=port)
+    return view_url, stop
 
