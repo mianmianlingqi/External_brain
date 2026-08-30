@@ -4,7 +4,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from brain import connect, expand, init, load, serve, start_view_server
+from brain import connect, expand, init, load, serve, serve_target, start_view_server
 
 
 def _post(url: str, payload: dict):
@@ -73,6 +73,33 @@ def test_remote_add_direction_survives_reload(tmp_path):
     finally:
         stop()
     assert "italian" in load(str(tmp_path)).list_directions()
+
+
+def test_serve_target_stays_up_before_init(tmp_path):
+    view_url, agent_url, stop = serve_target(str(tmp_path), host="127.0.0.1")
+    try:
+        base = agent_url.rsplit("/", 1)[0]
+        health = urlopen(base + "/health", timeout=2).read().decode("utf-8")
+        assert health == "ok"
+        page = urlopen(base + "/", timeout=2).read().decode("utf-8")
+        assert "Init" in page
+        with pytest.raises(HTTPError) as denied:
+            _post(agent_url, {"method": "add_direction", "args": {"name": "italian"}, "secret": ""})
+        assert denied.value.code == 403
+        body = json.loads(
+            _post(
+                agent_url,
+                {
+                    "method": "expand",
+                    "args": {"first_direction": "analog-electronics", "public_url": "https://brain.example"},
+                },
+            ).read()
+        )
+        remote = connect(agent_url, body["result"]["agent_secret"])
+        assert "analog-electronics" in remote.list_directions()
+        assert body["result"]["agent_address"] == "https://brain.example/brain"
+    finally:
+        stop()
 
 
 def test_remote_brain_matches_protocol_after_drill():

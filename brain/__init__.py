@@ -732,11 +732,12 @@ def connect(address: str, agent_secret: str) -> Brain:
 
 
 def serve(
-    brain: Brain,
-    view_secret: str,
-    agent_secret: str,
+    brain: Brain | None = None,
+    view_secret: str = "",
+    agent_secret: str = "",
     host: str = "0.0.0.0",
     port: int | None = None,
+    target: str | None = None,
 ):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Lock, Thread
@@ -745,6 +746,7 @@ def serve(
     if port is None:
         port = int(os.environ.get("PORT", "0"))
     lock = Lock()
+    slot = {"brain": brain, "view_secret": view_secret, "agent_secret": agent_secret}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args) -> None:
@@ -759,11 +761,21 @@ def serve(
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
+            if parsed.path == "/health":
+                self._send(200, b"ok", "text/plain; charset=utf-8")
+                return
+            if slot["brain"] is None:
+                self._send(
+                    200,
+                    b"<html><body><p>Brain is not initialized. Run Init.</p></body></html>",
+                    "text/html; charset=utf-8",
+                )
+                return
             query = parse_qs(parsed.query)
             provided = query.get("secret", [""])[0]
             direction = query.get("direction", [None])[0]
             try:
-                snapshot = view_snapshot(brain, view_secret, provided, direction)
+                snapshot = view_snapshot(slot["brain"], slot["view_secret"], provided, direction)
             except ViewDenied:
                 self.send_error(403)
                 return
@@ -783,13 +795,45 @@ def serve(
                 return
             provided = _agent_secret_from({k: self.headers[k] for k in self.headers}, payload)
             method = payload.get("method", "")
-            if not agent_secret or provided != agent_secret or method not in _BRAIN_METHODS:
+            if method == "expand":
+                if not target:
+                    self.send_error(403)
+                    return
+                args = payload.get("args") or {}
+                direction = (args.get("first_direction") or args.get("direction") or "").strip()
+                if not direction:
+                    self.send_error(400)
+                    return
+                with lock:
+                    if slot["brain"] is not None:
+                        self.send_error(409)
+                        return
+                    public_url = (args.get("public_url") or os.environ.get("PUBLIC_URL", "") or "http://127.0.0.1").strip()
+                    _, next_agent, next_view = expand(target, direction, kind="server", public_url=public_url)
+                    slot["brain"] = load(target)
+                    slot["agent_secret"] = next_agent
+                    slot["view_secret"] = next_view
+                root = Path(target) / ".brain"
+                result = {
+                    "agent_secret": next_agent,
+                    "view_secret": next_view,
+                    "agent_address": root.joinpath("agent.address").read_text(encoding="utf-8"),
+                    "view_link": root.joinpath("view.link").read_text(encoding="utf-8"),
+                }
+                self._send(200, json.dumps({"ok": True, "result": result}).encode("utf-8"), "application/json")
+                return
+            if (
+                slot["brain"] is None
+                or not slot["agent_secret"]
+                or provided != slot["agent_secret"]
+                or method not in _BRAIN_METHODS
+            ):
                 self.send_error(403)
                 return
             args = _prepare_args(method, payload.get("args") or {})
             try:
                 with lock:
-                    result = getattr(brain, method)(**args)
+                    result = getattr(slot["brain"], method)(**args)
             except Exception as exc:
                 if type(exc) not in _REMOTE_ERRORS.values():
                     raise
@@ -804,7 +848,7 @@ def serve(
     thread.start()
     assigned = server.server_port
     display = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
-    view_url = f"http://{display}:{assigned}/?secret={view_secret}"
+    view_url = f"http://{display}:{assigned}/?secret={slot['view_secret']}"
     agent_url = f"http://{display}:{assigned}/brain"
 
     def stop() -> None:
@@ -812,6 +856,17 @@ def serve(
         server.server_close()
 
     return view_url, agent_url, stop
+
+
+def serve_target(target: str, host: str = "0.0.0.0", port: int | None = None):
+    root = Path(target)
+    state = root / ".brain" / "state.json"
+    if state.exists():
+        brain = load(target)
+        agent_secret = (root / ".brain" / "agent.secret").read_text(encoding="utf-8").strip()
+        view_secret = (root / ".brain" / "view.secret").read_text(encoding="utf-8").strip()
+        return serve(brain, view_secret, agent_secret, host=host, port=port, target=target)
+    return serve(None, "", "", host=host, port=port, target=target)
 
 
 def start_view_server(brain: Brain, view_secret: str, host: str = "127.0.0.1", port: int = 0):

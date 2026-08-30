@@ -7,21 +7,10 @@ from pathlib import Path
 
 
 def _serve_target(target: str) -> None:
-    from brain import expand, load, serve
+    from brain import serve_target
 
-    root = Path(target)
-    state = root / ".brain" / "state.json"
-    if not state.exists():
-        direction = os.environ.get("FIRST_DIRECTION", "").strip()
-        if not direction:
-            raise SystemExit("No Brain at target. Run expand or set FIRST_DIRECTION.")
-        public_url = os.environ.get("PUBLIC_URL", "").strip() or "http://127.0.0.1"
-        expand(target, direction, kind="server", public_url=public_url)
-    brain = load(target)
-    agent_secret = (root / ".brain" / "agent.secret").read_text(encoding="utf-8").strip()
-    view_secret = (root / ".brain" / "view.secret").read_text(encoding="utf-8").strip()
     port = int(os.environ.get("PORT", "8080"))
-    view_url, agent_url, stop = serve(brain, view_secret, agent_secret, host="0.0.0.0", port=port)
+    view_url, agent_url, stop = serve_target(target, host="0.0.0.0", port=port)
     print(view_url)
     print(agent_url)
     try:
