@@ -101,5 +101,5 @@ A Question or Task whose latest Verdict is wrong. Misses under a Direction are w
 _Avoid_: 错题本, 错题集（口语可以说错题；正式词是 Miss）
 
 **Proposal**:
-A Point, Question, or Link an Agent suggests from pasted notes. It is not stored until the Owner accepts it.
-_Avoid_: draft, 建议, 候选
+A Point, Question, Task, or Link an Agent suggests. It is not stored until the Owner accepts it.
+_Avoid_: draft, 建议, 候选, 原件（原件不是 Proposal；Brain 不存原件）
