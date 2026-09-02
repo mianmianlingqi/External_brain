@@ -8,9 +8,22 @@
 
 MCUS 是一个 **离线 MCU 选型目录**，不是固件管理工具（与 Nordic/Mynewt 的 McuManager 无关），也不是学习平台。它把厂商官方选型器、CMSIS-Pack、数据手册和工具链元数据收成一份可检索的目录，用 Android WebView 壳和 Cloudflare 静态包两套前端共用同一份 JS 快照。作者自称「离线 AI 选型助手」，源码里这是 **确定性中文槽位解析 + 目录硬约束**，没有神经网络，也没有把 prompt 送出设备。
 
+产品本质是 **一张（规范化过的）大表，加上扫表的 UI**。运行时没有 SQLite/Room/索引服务：`app.js` 把 `window.MCU_CATALOG.devices`（13,377 行）读进内存，搜索是拼好的 `_q` 字符串 `includes`，筛选是 `Array.filter`，助手是槽位解析后再扫同一数组。Catalog README 写「可导入 SQLite/Room」，客户端没有做。不是知识图谱，不是问答库，也没有运行时厂商 API（询价关闭）。工程量在表怎么做成：三级标识、来源、不臆造、校验；不在表之上另有一层智能。
+
 截至 2026-08-29 的最新 GitHub Release 是 `1.1~weeklypatch1`：17 家厂商、13,377 个器件变体、20,418 个已核验完整订货号。`main` 停在 `1.0.2`，根 README 仍写 `1.0.1` / 7,916 器件，文档与代码不同步。
 
 本仓库（External Brain Seed）里没有任何 MCUS 引用。若 Owner 把 MCU 当作 Direction，MCUS 是选型工具，不是教材；它的「不臆造、保留未知、订货号不排列组合」纪律，可以对照 Brain 里 Point / Proposal 的验收规则。
+
+## 本质：大表
+
+是。交付给工程师的东西就是器件行。
+
+- 落盘：`device-variants.csv` / `device-capabilities.csv` / `device-scores.csv` 各 13,378 行（含表头），一对一打平。
+- 进 App：`generate_catalog.py` 合成单文件 `catalog.js`（约 34 MB），挂到 `window.MCU_CATALOG.devices`。
+- 查询：`filtered()` 对数组做子串 + 列过滤；`aiRecommend()` 先解析槽位，再 `devices.filter` / 打分。`localStorage` 只存对比 ID 和助手对话，不存目录。
+- 目录页的「厂商 → 系列 → 产品线」是同一数组的 `group()`，不是另一份图数据。
+
+表的 schema 比 Excel 选型表讲究（产品线 / 变体 / 订货号分开，ADC 三义，待核验 vs 已确认）。那是 **怎么填这张表**，不是第二种产品。Catalog README 提到的 SQLite/Room 仍是「适合导入」的设想，Android 源码只有 WebView + 内存数组。
 
 ## 身份
 
