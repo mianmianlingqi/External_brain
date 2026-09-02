@@ -1,0 +1,3 @@
+interface:
+  display_name: "MCUS catalog"
+  short_description: "Look up and select MCUs from the MCUS table"

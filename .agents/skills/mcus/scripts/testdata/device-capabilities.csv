@@ -1,0 +1,4 @@
+device_id,manufacturer,device_name,primary_core,core_names,core_count,max_clock_hz,fpu_present,timer_count,uart_count,usart_count,spi_count,i2c_count,can_count,usb_count,usb_device_count,usb_host_count,ethernet_count,gpio_count,adc_unit_count,adc_channel_count,camera_interface_count,missing_key_fields,peripheral_inventory_json
+st::stm32f103c8,STMicroelectronics,STM32F103C8,Cortex-M3,Cortex-M3,1,72000000,no,4,0,3,2,2,1,0,1,0,0,36,2,10,0,,"[{""type"": ""CAN""}, {""type"": ""USB""}]"
+st::stm32f429zit6,STMicroelectronics,STM32F429ZIT6,Cortex-M4,Cortex-M4,1,180000000,yes,14,0,4,6,3,2,0,1,1,1,114,3,24,1,,"[{""type"": ""CAN""}, {""type"": ""ETH""}]"
+esp::esp32-s3,Espressif,ESP32-S3,Xtensa,Xtensa LX7,2,240000000,unknown,4,3,0,4,2,,0,1,1,0,45,2,20,1,can_count,"[{""type"": ""UART""}, {""type"": ""WiFi""}, {""type"": ""Bluetooth""}]"

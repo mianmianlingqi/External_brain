@@ -1,0 +1,4 @@
+device_id,manufacturer,series,product_line,device_name,product_type,max_clock_hz,flash_bytes,ram_bytes,package_types,pin_counts,source_url
+st::stm32f103c8,STMicroelectronics,STM32F1,STM32F103,STM32F103C8,mcu,72000000,65536,20480,LQFP,48,https://www.st.com/
+st::stm32f429zit6,STMicroelectronics,STM32F4,STM32F429,STM32F429ZIT6,mcu,180000000,2097152,262144,LQFP,144,https://www.st.com/
+esp::esp32-s3,Espressif,ESP32,ESP32-S3,ESP32-S3,wireless_mcu,240000000,0,524288,QFN,56,https://www.espressif.com/

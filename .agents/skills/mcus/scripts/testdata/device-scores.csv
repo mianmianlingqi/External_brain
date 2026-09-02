@@ -1,0 +1,4 @@
+device_id,selection_index,score_coverage_percent
+st::stm32f103c8,42,85
+st::stm32f429zit6,71,92
+esp::esp32-s3,60,80
