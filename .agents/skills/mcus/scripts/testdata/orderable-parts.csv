@@ -1,0 +1,3 @@
+orderable_part_id,device_id,part_number
+st::stm32f103c8t6,st::stm32f103c8,STM32F103C8T6
+st::stm32f103c8t6tr,st::stm32f103c8,STM32F103C8T6TR

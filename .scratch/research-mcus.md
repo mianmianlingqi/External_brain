@@ -240,6 +240,8 @@ Android debug 构建即使传入 Worker 地址也不启用询价（`build.ps1` �
 
 不要把 MCUS 当 MCU Direction 的内容源直接灌进 Brain：它是快照目录，没有「先学什么」的 Link，也没有 Question。AliceSim 更接近教学，但仍是另一套产品。
 
+Agent 接入走附属 Skill `mcus`（`.agents/skills/mcus/`），不是向量检索，也不经 Brain 接口。命令是 lookup / select / compare / coverage，硬约束遇空字段即失败。见 ADR-0016。
+
 ## 不建议先做向量检索
 
 选型查询是约束，不是近义文档。助手示例是「120MHz 以上、2 个 UART、CAN、64KB RAM 的 Cortex-M4」和「别带无线」。这类条件要的是阈值、有无、否定；向量近邻会把「差不多」的芯片拉回来，正好踩他们已经写死的硬约束（`aiHardScope`：硬范围在近似推荐时也不放宽）。
